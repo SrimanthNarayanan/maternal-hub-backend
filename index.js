@@ -2,12 +2,15 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+
 import express from "express";
 import snowflake from "snowflake-sdk";
-import fetch from "node-fetch";
 import cors from "cors";
 import bodyParser from "body-parser";
-import router from "./aiserver.js"; 
+
+
+// ⭐️ Renamed 'aiserver 1.js' to 'aiserver.js'
+import router from "./aiserver.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -16,393 +19,490 @@ app.use(cors());
 app.use(bodyParser.json());
 
 // --- Snowflake connection setup ---
+// ⭐️ Make sure your .env file has these new names
 const connection = snowflake.createConnection({
-  account: process.env.SF_ACCOUNT,
-  username: process.env.SF_USER,
-  password: process.env.SF_PASSWORD,
-  warehouse: process.env.SF_WAREHOUSE,
-  database: process.env.SF_DATABASE,
-  schema: process.env.SF_SCHEMA,
+    account: process.env.SF_ACCOUNT,
+    username: process.env.SF_USER,
+    password: process.env.SF_PASSWORD,
+    warehouse: process.env.SF_WAREHOUSE,
+    database: process.env.SF_DATABASE,
+    schema: process.env.SF_SCHEMA,
 });
 
 // utility to run queries returning Promise<rows>
-function runQuery(sql, params = []) {
+const runQuery = async (sql, params = []) => {
   return new Promise((resolve, reject) => {
     connection.execute({
       sqlText: sql,
-      binds: params,
+      binds: params, // This is crucial - binds the parameters
       complete: (err, stmt, rows) => {
-        if (err) return reject(err);
-        // rows comes from Snowflake driver
-        resolve(rows || []);
-      },
+        if (err) {
+          reject(err);
+        } else {
+          resolve(rows);
+        }
+      }
     });
   });
-}
+};
+
 
 // ====== Unified cache for delivered patients ======
 let unifiedCache = {
-  visits: [],
-  patients: [],
-  deliveries: [],
-  babies: [],
-  loaded: false,
-  loading: false,
-  error: null,
+    visits: [],
+    patients: [],
+    deliveries: [],
+    babies: [],
+    loaded: false,
+    loading: false,
+    error: null,
 };
+
 
 // ====== Unified cache for ongoing patients ======
 let unifiedCacheOngoing = {
-  visits: [],
-  patients: [],
-  loaded: false,
-  loading: false,
-  error: null,
+    visits: [],
+    patients: [],
+    loaded: false,
+    loading: false,
+    error: null,
 };
+
 
 // Load full hospital data
 async function loadAllData() {
-  if (unifiedCache.loading) return;
-  unifiedCache.loading = true;
-  console.log("🔄 Loading hospital data into cache...");
+    if (unifiedCache.loading) return;
+    unifiedCache.loading = true;
+    console.log("🔄 Loading hospital data into cache...");
 
-  try {
-    const startTime = Date.now();
-    const [visits, patients, deliveries, babies] = await Promise.all([
-      runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_visits_view"),
-      runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_patients_view"),
-      runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_deliveries_view"),
-      runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_baby_view"),
-    ]);
+    try {
+        const startTime = Date.now();
+        // ⭐️ Make sure these view names match your Snowflake
+        const [visits, patients, deliveries, babies] = await Promise.all([
+            runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_visits_view"),
+            runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_patients_view"),
+            runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_deliveries_view"),
+            runQuery("SELECT * FROM HEAL.HOSPITAL_VIEW.unified_baby_view"),
+        ]);
 
-    unifiedCache.visits = visits || [];
-    unifiedCache.patients = patients || [];
-    unifiedCache.deliveries = deliveries || [];
-    unifiedCache.babies = babies || [];
-    unifiedCache.loaded = true;
+        unifiedCache.visits = visits || [];
+        unifiedCache.patients = patients || [];
+        unifiedCache.deliveries = deliveries || [];
+        unifiedCache.babies = babies || [];
+        unifiedCache.loaded = true;
 
-    console.log(
-      `✅ Main Cache Loaded: ${unifiedCache.patients.length} patients, ${unifiedCache.deliveries.length} deliveries`
-    );
-  } catch (err) {
-    console.error("❌ Error loading main cache:", err);
-    unifiedCache.error = err.message;
-  } finally {
-    unifiedCache.loading = false;
-  }
+        console.log(
+            `✅ Main Cache Loaded: ${unifiedCache.patients.length} patients, ${unifiedCache.deliveries.length} deliveries`
+        );
+    } catch (err) {
+        console.error("❌ Error loading main cache:", err);
+        unifiedCache.error = err.message;
+    } finally {
+        unifiedCache.loading = false;
+    }
 }
+
+
 
 // Load ongoing pregnancy data
 async function loadOngoingData() {
-  if (unifiedCacheOngoing.loading) return;
-  unifiedCacheOngoing.loading = true;
-  console.log("🔄 Loading ongoing patients data into cache...");
+    if (unifiedCacheOngoing.loading) return;
+    unifiedCacheOngoing.loading = true;
+    console.log("🔄 Loading ongoing patients data into cache...");
 
-  try {
-    const startTime = Date.now();
-    const [visits, patients] = await Promise.all([
-      runQuery("SELECT * FROM HEAL.ONGOING.UNIFIED_VISITS_TABLE"),
-      runQuery("SELECT * FROM HEAL.ONGOING.UNIFIED_PATIENTS_TABLE"),
-    ]);
+    try {
+        const startTime = Date.now();
+        // ⭐️ Make sure these table names match your Snowflake
+        const [visits, patients] = await Promise.all([
+            runQuery("SELECT * FROM HEAL.ONGOING.UNIFIED_VISITS_TABLE"),
+            runQuery("SELECT * FROM HEAL.ONGOING.UNIFIED_PATIENTS_TABLE"),
+        ]);
 
-    unifiedCacheOngoing.visits = visits || [];
-    unifiedCacheOngoing.patients = patients || [];
-    unifiedCacheOngoing.loaded = true;
+        unifiedCacheOngoing.visits = visits || [];
+        unifiedCacheOngoing.patients = patients || [];
+        unifiedCacheOngoing.loaded = true;
 
-    const loadTime = Date.now() - startTime;
-    console.log(`✅ Ongoing Cache Loaded in ${loadTime}ms`);
-    console.log(
-      `📊 Stats: ${unifiedCacheOngoing.patients.length} ongoing patients, ${unifiedCacheOngoing.visits.length} visits`
-    );
-  } catch (err) {
-    console.error("❌ Error loading ongoing cache:", err);
-    unifiedCacheOngoing.error = err.message;
-  } finally {
-    unifiedCacheOngoing.loading = false;
-  }
+        const loadTime = Date.now() - startTime;
+        console.log(`✅ Ongoing Cache Loaded in ${loadTime}ms`);
+        console.log(
+            `📊 Stats: ${unifiedCacheOngoing.patients.length} ongoing patients, ${unifiedCacheOngoing.visits.length} visits`
+        );
+    } catch (err) {
+        console.error("❌ Error loading ongoing cache:", err);
+        unifiedCacheOngoing.error = err.message;
+    } finally {
+        unifiedCacheOngoing.loading = false;
+    }
 }
 
 // Connect once, then load both caches
 connection.connect(async (err, conn) => {
-  if (err) {
-    console.error("❌ Unable to connect to Snowflake:", err.message);
-    return;
-  }
+    if (err) {
+        console.error("❌ Unable to connect to Snowflake:", err.message);
+        return;
+    }
 
-  console.log("✅ Connected to Snowflake!");
-  try {
-    console.log("Connection ID:", conn.getId());
-  } catch {}
+    console.log("✅ Connected to Snowflake!");
+    try {
+        console.log("Connection ID:", conn.getId());
+    } catch { }
 
-  // Load both caches
-  await loadAllData();
-  await loadOngoingData();
+    // Load both caches
+    await loadAllData();
+    await loadOngoingData();
 });
+
+
+
 
 // ========== API endpoints ==========
 
 // expose ai router
 app.use("/api/ai", router);
 
+
+
 // Cache status
 app.get("/api/cache/status", (req, res) => {
-  res.json({
-    loaded: unifiedCache.loaded,
-    loading: unifiedCache.loading,
-    error: unifiedCache.error,
-    stats: {
-      patients: unifiedCache.patients.length,
-      visits: unifiedCache.visits.length,
-      deliveries: unifiedCache.deliveries.length,
-      babies: unifiedCache.babies.length,
-    },
-  });
+    res.json({
+        loaded: unifiedCache.loaded,
+        loading: unifiedCache.loading,
+        error: unifiedCache.error,
+        stats: {
+            patients: unifiedCache.patients.length,
+            visits: unifiedCache.visits.length,
+            deliveries: unifiedCache.deliveries.length,
+            babies: unifiedCache.babies.length,
+        },
+    });
 });
 
 // Debug: first 10 patients
 app.get("/api/debug/patients", (req, res) => {
-  if (!unifiedCache.loaded) {
-    return res.status(503).json({ error: "Cache not loaded" });
-  }
+    if (!unifiedCache.loaded) {
+        return res.status(503).json({ error: "Cache not loaded" });
+    }
 
-  const firstTenPatients = unifiedCache.patients.slice(0, 10).map((p) => ({
-    PATIENT_ID: p.PATIENT_ID,
-    PATIENT_NAME: `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.trim(),
-    SOURCE_SCHEMA: p.SOURCE_SCHEMA,
-  }));
+    const firstTenPatients = unifiedCache.patients.slice(0, 10).map((p) => ({
+        PATIENT_ID: p.PATIENT_ID,
+        PATIENT_NAME: `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.trim(),
+        SOURCE_SCHEMA: p.SOURCE_SCHEMA,
+    }));
 
-  res.json({
-    message: "First 10 patients from cache:",
-    patients: firstTenPatients,
-    totalPatients: unifiedCache.patients.length,
-  });
+    res.json({
+        message: "First 10 patients from cache:",
+        patients: firstTenPatients,
+        totalPatients: unifiedCache.patients.length,
+    });
 });
 
 // Debug: search patients by name
 app.get("/api/debug/search/:name", (req, res) => {
-  if (!unifiedCache.loaded) {
-    return res.status(503).json({ error: "Cache not loaded" });
-  }
+    if (!unifiedCache.loaded) {
+        return res.status(503).json({ error: "Cache not loaded" });
+    }
 
-  const searchName = (req.params.name || "").toLowerCase();
-  const foundPatients = unifiedCache.patients
-    .filter((p) => {
-      const fullName = `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.toLowerCase();
-      return fullName.includes(searchName);
-    })
-    .slice(0, 10)
-    .map((p) => ({
-      PATIENT_ID: p.PATIENT_ID,
-      PATIENT_NAME: `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.trim(),
-      SOURCE_SCHEMA: p.SOURCE_SCHEMA,
-    }));
+    const searchName = (req.params.name || "").toLowerCase();
+    const foundPatients = unifiedCache.patients
+        .filter((p) => {
+            const fullName = `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.toLowerCase();
+            return fullName.includes(searchName);
+        })
+        .slice(0, 10)
+        .map((p) => ({
+            PATIENT_ID: p.PATIENT_ID,
+            PATIENT_NAME: `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.trim(),
+            SOURCE_SCHEMA: p.SOURCE_SCHEMA,
+        }));
 
-  res.json({
-    search: searchName,
-    found: foundPatients.length,
-    patients: foundPatients,
-  });
+    res.json({
+        search: searchName,
+        found: foundPatients.length,
+        patients: foundPatients,
+    });
 });
 
 // Manual reload
 app.get("/api/cache/reload", async (req, res) => {
-  try {
-    await loadAllData();
-    res.json({ message: "Cache reload triggered", status: "success" });
-  } catch (err) {
-    res.status(500).json({ message: "Reload failed", error: err?.message || String(err) });
-  }
+    try {
+        await loadAllData();
+        res.json({ message: "Cache reload triggered", status: "success" });
+    } catch (err) {
+        res.status(500).json({ message: "Reload failed", error: err?.message || String(err) });
+    }
 });
 
-// Patient details from cache
+// Patient details from cache (for historical "Patient Details" page)
 app.get("/api/patientDetails/:id", (req, res) => {
-  const patientId = Number(req.params.id);
-  if (Number.isNaN(patientId)) {
-    return res.status(400).json({ error: "Invalid patient id" });
-  }
+    const patientId = Number(req.params.id);
+    if (Number.isNaN(patientId)) {
+        return res.status(400).json({ error: "Invalid patient id" });
+    }
 
-  if (!unifiedCache.loaded) {
-    return res.status(503).json({
-      error: "Cache is still loading. Please try again in a few seconds.",
-    });
-  }
+    if (!unifiedCache.loaded) {
+        return res.status(503).json({
+            error: "Cache is still loading. Please try again in a few seconds.",
+        });
+    }
 
-  console.log(`🔍 Fetching patient ${patientId} from cache...`);
+    console.log(`🔍 Fetching patient ${patientId} from cache...`);
 
-  const patient = unifiedCache.patients.find((p) => Number(p.PATIENT_ID) === patientId);
+    const patient = unifiedCache.patients.find((p) => Number(p.PATIENT_ID) === patientId);
 
-  if (!patient) {
-    return res.status(404).json({ error: "Patient not found" });
-  }
+    if (!patient) {
+        return res.status(404).json({ error: "Patient not found" });
+    }
 
-  const visits = unifiedCache.visits.filter((v) => Number(v.PATIENT_ID) === patientId);
-  const deliveries = unifiedCache.deliveries.filter((d) => Number(d.PATIENT_ID) === patientId);
+    const visits = unifiedCache.visits.filter((v) => Number(v.PATIENT_ID) === patientId);
+    const deliveries = unifiedCache.deliveries.filter((d) => Number(d.PATIENT_ID) === patientId);
 
-  const deliveryIds = deliveries.map((d) => d.DELIVERY_ID).filter((id) => id != null);
-  const babies = unifiedCache.babies.filter((b) => deliveryIds.includes(b.DELIVERY_ID));
+    // ⭐️ This logic seems to find babies by delivery ID.
+    const deliveryIds = deliveries.map((d) => d.PATIENT_ID).filter((id) => id != null);
+    const babies = unifiedCache.babies.filter((b) => deliveryIds.includes(b.PATIENT_ID));
 
-  const result = {
-    patient: {
-      PATIENT_ID: patient.PATIENT_ID,
-      PATIENT_NAME: `${patient.FIRST_NAME || ""} ${patient.LAST_NAME || ""}`.trim(),
-      AGE: patient.AGE,
-      ADDRESS: patient.ADDRESS,
-      CONTACT_NUMBER: patient.CONTACT_NUMBER,
-      BLOOD_TYPE: patient.BLOOD_TYPE,
-      SOURCE_SCHEMA: patient.SOURCE_SCHEMA,
-    },
-    visits,
-    deliveries,
-    babies,
-    source: "cache",
-    performance: "instant",
-  };
+    const result = {
+        patient: patient,
+        visits,
+        deliveries,
+        babies,
+        source: "cache",
+    };
 
-  console.log(`✅ Patient data ready: ${visits.length} visits, ${deliveries.length} deliveries, ${babies.length} babies`);
-  res.json(result);
+    console.log(`✅ Patient data ready: ${visits.length} visits, ${deliveries.length} deliveries, ${babies.length} babies`);
+    res.json(result);
 });
 
-// Get patients list (filter by SOURCE_SCHEMA)
+// Get patients list (for historical "Patient Details" page)
 app.get("/api/patients", (req, res) => {
-  if (!unifiedCache.loaded) {
-    return res.status(503).json({
-      error: "Cache is still loading. Please wait...",
-      loading: true,
-    });
-  }
+    if (!unifiedCache.loaded) {
+        return res.status(503).json({
+            error: "Cache is still loading. Please wait...",
+            loading: true,
+        });
+    }
 
-  const schema = (req.query.schema || "ALL").toString().toUpperCase();
-  console.log(`🔍 Filtering patients by SOURCE_SCHEMA: ${schema}`);
+    // This just gets all patients. Your old code filtered by schema, but this seems simpler.
+    let patientList = unifiedCache.patients;
 
-  let patientList;
-  if (schema === "ALL") {
-    patientList = unifiedCache.patients;
-    console.log(`✅ Returning ALL patients (${patientList.length})`);
-  } else {
-    const matchingDeliveries = unifiedCache.deliveries.filter(
-      (d) => (d.SOURCE_SCHEMA || "").toString().toUpperCase() === schema
-    );
-    const matchedPatientIds = new Set(matchingDeliveries.map((d) => d.PATIENT_ID));
-    patientList = unifiedCache.patients.filter((p) => matchedPatientIds.has(p.PATIENT_ID));
-    console.log(`✅ Returning ${patientList.length} patients for schema: ${schema}`);
-  }
+    const formattedPatients = (patientList || []).map((patient) => ({
+        PATIENT_ID: patient.PATIENT_ID,
+        PATIENT_NAME: `${patient.FIRST_NAME || ""} ${patient.LAST_NAME || ""}`.trim() || "Unknown Name",
+    }));
 
-  const formattedPatients = (patientList || []).map((patient) => ({
-    PATIENT_ID: patient.PATIENT_ID,
-    PATIENT_NAME: `${patient.FIRST_NAME || ""} ${patient.LAST_NAME || ""}`.trim() || "Unknown Name",
-    AGE: patient.AGE,
-    ADDRESS: patient.ADDRESS,
-    SOURCE_SCHEMA: patient.SOURCE_SCHEMA,
-  }));
-
-  res.json(formattedPatients);
+    res.json(formattedPatients);
 });
+
 
 // =======================
-// 🩺 Ongoing Patients Endpoint (Single Schema)
+// 🩺 Ongoing Patients List (for "Ongoing Visits" page)
 // =======================
 app.get("/api/ongoing-patients", (req, res) => {
-  if (!unifiedCacheOngoing.loaded) {
-    return res.status(503).json({
-      error: "Ongoing patients cache is still loading. Please wait...",
-      loading: true,
-    });
-  }
+    if (!unifiedCacheOngoing.loaded) {
+        return res.status(503).json({
+            error: "Ongoing patients cache is still loading. Please wait...",
+            loading: true,
+        });
+    }
 
-  const patientId = req.query.patientId
-    ? Number(req.query.patientId)
-    : null;
-
-  let patientList = unifiedCacheOngoing.patients;
-
-  // 🔍 Filter by patientId if provided
-  if (patientId) {
-    patientList = patientList.filter(
-      (p) => Number(p.PATIENT_ID) === patientId
-    );
-    console.log(`✅ Returning ongoing patient with ID: ${patientId}`);
-  } else {
+    const patientList = unifiedCacheOngoing.patients;
     console.log(`✅ Returning all ongoing patients (${patientList.length})`);
-  }
 
-  // 🧩 Format the response
-  const formattedPatients = patientList.map((p) => ({
-    PATIENT_ID: p.PATIENT_ID,
-    PATIENT_NAME:
-      `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.trim() || "Unknown Name",
-    AGE: p.AGE || "N/A",
-    ADDRESS: p.ADDRESS || "N/A",
-  }));
+    // 🧩 Format the response
+    const formattedPatients = patientList.map((p) => ({
+        PATIENT_ID: p.PATIENT_ID,
+        PATIENT_NAME:
+            `${p.FIRST_NAME || ""} ${p.LAST_NAME || ""}`.trim() || "Unknown Name",
+    }));
 
-  res.json(formattedPatients);
+    res.json(formattedPatients);
 });
 
-// Test endpoint
-app.get("/api/test", (req, res) => {
-  res.json({
-    message: "Snowflake connection successful!",
-    cacheStatus: unifiedCache.loaded ? "loaded" : "loading",
-  });
-});
-
-// Dashboard endpoint (example query) - keep consistent view names
-app.get("/api/dashboard", (req, res) => {
-  const query = `
-    SELECT PATIENT_ID, CONCAT(FIRST_NAME,' ',LAST_NAME) AS PATIENT_NAME, ADDRESS
-    FROM HEAL.HOSPITAL_VIEW.unified_patients_view
-    LIMIT 10;
-  `;
-
-  connection.execute({
-    sqlText: query,
-    complete: (err, stmt, rows) => {
-      if (err) {
-        console.error("Error fetching data:", err);
-        return res.status(500).json({ error: "Error fetching data" });
-      }
-      res.json(rows || []);
-    },
-  });
-});
 
 // =======================
-// 🩺 Get Ongoing Patient Details by ID
+// 🩺 Get Ongoing Patient Details by ID (for "Ongoing Visits" page)
 // =======================
 app.get("/api/ongoing-patientDetails/:id", (req, res) => {
-  if (!unifiedCacheOngoing.loaded) {
-    return res.status(503).json({
-      error: "Ongoing patients cache is still loading. Please wait...",
-      loading: true,
-    });
-  }
+    if (!unifiedCacheOngoing.loaded) {
+        return res.status(503).json({
+            error: "Ongoing patients cache is still loading. Please wait...",
+            loading: true,
+        });
+    }
 
-  const patientId = Number(req.params.id);
-  if (!patientId) {
-    return res.status(400).json({ error: "Invalid or missing patient ID" });
-  }
+    const patientId = Number(req.params.id);
+    if (!patientId) {
+        return res.status(400).json({ error: "Invalid or missing patient ID" });
+    }
 
-  // 🔍 Find patient
-  const patient = unifiedCacheOngoing.patients.find(
-    (p) => Number(p.PATIENT_ID) === patientId
-  );
-  if (!patient) {
-    return res.status(404).json({ error: `No ongoing patient found with ID ${patientId}` });
-  }
+    // 🔍 Find patient
+    const patient = unifiedCacheOngoing.patients.find(
+        (p) => Number(p.PATIENT_ID) === patientId
+    );
+    if (!patient) {
+        return res.status(404).json({ error: `No ongoing patient found with ID ${patientId}` });
+    }
 
-  // 🔍 Find visits linked to this patient
-  const visits = unifiedCacheOngoing.visits.filter(
-    (v) => Number(v.PATIENT_ID) === patientId
-  );
+    // 🔍 Find visits linked to this patient
+    const visits = unifiedCacheOngoing.visits.filter(
+        (v) => Number(v.PATIENT_ID) === patientId
+    );
 
-  // 🧩 Structure response
-  const response = {
-    patient,
-    visits,
-    message: `✅ Found ${visits.length} visits for ongoing patient ID ${patientId}`,
-  };
+    // 🧩 Structure response
+    const response = {
+        patient,
+        visits,
+        // Add empty arrays so the React app doesn't crash
+        deliveries: [],
+        babies: [],
+        message: `✅ Found ${visits.length} visits for ongoing patient ID ${patientId}`,
+    };
 
-  res.json(response);
+    res.json(response);
 });
+
+
+// =======================
+// 🩺 Home Page KPI Summary
+// =======================
+app.get("/api/home-summary", (req, res) => {
+    console.log("📊 Home summary requested - Cache status:", {
+        main: unifiedCache.loaded,
+        ongoing: unifiedCacheOngoing.loaded
+    });
+
+    if (!unifiedCache.loaded || !unifiedCacheOngoing.loaded) {
+        console.log("❌ Cache not ready yet");
+        return res.status(503).json({
+            success: false,
+            error: "Cache is still loading. Please wait...",
+            loading: true,
+            cacheStatus: {
+                main: unifiedCache.loaded,
+                ongoing: unifiedCacheOngoing.loaded
+            }
+        });
+    }
+
+    try {
+        // Safely access cache data with fallbacks
+        const hospitalPatients = unifiedCache.patients || [];
+        const ongoingPatients = unifiedCacheOngoing.patients || [];
+        const deliveries = unifiedCache.deliveries || [];
+        const babies = unifiedCache.babies || [];
+        const hospitalVisits = unifiedCache.visits || [];
+        const ongoingVisits = unifiedCacheOngoing.visits || [];
+
+        console.log("📈 Data counts:", {
+            hospitalPatients: hospitalPatients.length,
+            ongoingPatients: ongoingPatients.length,
+            deliveries: deliveries.length,
+            babies: babies.length
+        });
+
+        // Calculate metrics
+        const totalHospitalPatients = hospitalPatients.length;
+        const totalOngoingPatients = ongoingPatients.length;
+        const totalPatients = totalHospitalPatients + totalOngoingPatients;
+        
+        // Calculate delivery types
+        let normalDeliveryCount = 0;
+        let cSectionDeliveryCount = 0;
+        
+        deliveries.forEach(delivery => {
+            const mode = delivery.DELIVERY_MODE?.toLowerCase();
+            if (mode) {
+                if (mode.includes('vaginal') || mode.includes('normal')) {
+                    normalDeliveryCount++;
+                } else if (mode.includes('c-section') || mode.includes('cesarean') || mode.includes('c_section')) {
+                    cSectionDeliveryCount++;
+                }
+            }
+        });
+        
+        const totalDeliveries = normalDeliveryCount + cSectionDeliveryCount;
+        const totalBabies = babies.length;
+        
+        // Calculate today's appointments
+        const today = new Date().toDateString();
+        const todaysAppointments = 
+            hospitalVisits.filter(v => v.VISIT_DATE && new Date(v.VISIT_DATE).toDateString() === today).length +
+            ongoingVisits.filter(v => v.VISIT_DATE && new Date(v.VISIT_DATE).toDateString() === today).length;
+        
+        // Calculate delivery types from babies data or deliveries data
+        let maturedCount = 0;
+        let prematureCount = 0;
+        let mortalityCount = 0;
+
+        // Calculate from babies data
+        babies.forEach(baby => {
+            // Assuming SOURCE_SCHEMA indicates the delivery type
+            if (baby.SOURCE_SCHEMA === 'MATURED') {
+                maturedCount++;
+            } else if (baby.SOURCE_SCHEMA === 'PREMATURE') {
+                prematureCount++;
+            } 
+        });
+
+         // Calculate mortality from patients data
+        hospitalPatients.forEach(patient => {
+            if (patient.SOURCE_SCHEMA === 'MORTALITY') {
+                mortalityCount++;
+            }
+        });
+
+        const totalBabiesWithType = maturedCount + prematureCount + mortalityCount;
+        const maturedRate = totalBabiesWithType > 0 ? Math.round((maturedCount / totalBabiesWithType) * 100) : 0;
+        const prematureRate = totalBabiesWithType > 0 ? Math.round((prematureCount / totalBabiesWithType) * 100) : 0;
+        const mortalityRate = totalBabiesWithType > 0 ? Math.round((mortalityCount / totalBabiesWithType) * 100) : 0;
+
+        const summary = {
+            success: true,
+            // Core Metrics
+            totalPatients: totalPatients,
+            activePregnancies: totalOngoingPatients,
+            historicalPatients: totalHospitalPatients,
+            
+            // Delivery Analytics
+            normalDeliveryCount: normalDeliveryCount,
+            cSectionDeliveryCount: cSectionDeliveryCount,
+            totalDeliveries: totalDeliveries,
+            totalBabies: totalBabies,
+            
+            // Daily Operations
+            todaysAppointments: todaysAppointments,
+            
+            // Calculated Ratios
+            normalDeliveryRate: totalDeliveries > 0 ? Math.round((normalDeliveryCount / totalDeliveries) * 100) : 0,
+            cSectionRate: totalDeliveries > 0 ? Math.round((cSectionDeliveryCount / totalDeliveries) * 100) : 0,
+
+            // Delivery Types - Add this to your response
+            deliveryTypes: {
+                matured: maturedRate,
+                premature: prematureRate,
+                mortality: mortalityRate,
+                maturedCount: maturedCount,
+                prematureCount: prematureCount,
+                mortalityCount: mortalityCount
+            }
+        };
+
+        console.log("✅ Home Summary Generated:", summary);
+        res.json(summary);
+        
+    } catch (err) {
+        console.error("❌ Error in /api/home-summary:", err.message);
+        res.status(500).json({ 
+            success: false,
+            error: "Failed to generate summary from cache",
+            details: err.message 
+        });
+    }
+});
+
+
+// =======================
+// 🩺 Reference Averages Endpoint
+// =======================
 
 app.post("/api/reference-averages", async (req, res) => {
   try {
@@ -417,7 +517,7 @@ app.post("/api/reference-averages", async (req, res) => {
 
     console.log(`📊 Fetching averages for ${deliveryType} + ${deliveryMode}`);
 
-    // Corrected SQL query - use runQuery instead of executeQuery
+    // FIXED: Use parameterized query correctly
     const sql = `
       SELECT
         V.GESTATIONAL_AGE_WEEKS,
@@ -437,7 +537,7 @@ app.post("/api/reference-averages", async (req, res) => {
       ORDER BY V.GESTATIONAL_AGE_WEEKS ASC
     `;
 
-    // Use runQuery (the function you defined) instead of executeQuery
+    // FIXED: Use the correct parameter format for Snowflake
     const rows = await runQuery(sql, [deliveryType, deliveryMode]);
 
     if (!rows || rows.length === 0) {
@@ -511,12 +611,239 @@ app.post("/api/reference-averages", async (req, res) => {
       success: false,
       error: "Failed to fetch reference averages.",
       details: error.message,
+      sqlState: error.sqlState,
+      code: error.code
     });
   }
 });
 
+
+// Debug endpoint to check cache status
+app.get("/api/debug-cache", (req, res) => {
+    const cacheStatus = {
+        unifiedCache: {
+            loaded: unifiedCache.loaded,
+            loading: unifiedCache.loading,
+            patients: unifiedCache.patients?.length || 0,
+            deliveries: unifiedCache.deliveries?.length || 0,
+            babies: unifiedCache.babies?.length || 0,
+            visits: unifiedCache.visits?.length || 0
+        },
+        unifiedCacheOngoing: {
+            loaded: unifiedCacheOngoing.loaded,
+            loading: unifiedCacheOngoing.loading,
+            patients: unifiedCacheOngoing.patients?.length || 0,
+            visits: unifiedCacheOngoing.visits?.length || 0
+        },
+        timestamp: new Date().toISOString()
+    };
+    
+    console.log("🔍 Cache Debug Info:", cacheStatus);
+    res.json(cacheStatus);
+});
+
+
+
+// =======================
+// 🏥 Get Unique Patient Addresses
+// =======================
+app.get("/api/patient-addresses", (req, res) => {
+    if (!unifiedCache.loaded) {
+        return res.status(503).json({
+            error: "Cache is still loading. Please wait...",
+            loading: true,
+        });
+    }
+
+    try {
+        // Extract unique addresses from patients data
+        const addresses = unifiedCache.patients
+            .map(p => p.ADDRESS)
+            .filter(address => address && address.trim() !== '') // Remove empty addresses
+            .filter((address, index, self) => self.indexOf(address) === index) // Get unique addresses
+            .sort(); // Sort alphabetically
+
+        // Add "All Locations" option
+        const addressOptions = [
+            { value: 'all', label: 'All Locations' },
+            ...addresses.map(address => ({
+                value: address,
+                label: address
+            }))
+        ];
+
+        console.log(`✅ Found ${addresses.length} unique patient addresses`);
+        
+        res.json({
+            success: true,
+            addresses: addressOptions
+        });
+    } catch (err) {
+        console.error("❌ Error fetching patient addresses:", err);
+        res.status(500).json({
+            success: false,
+            error: "Failed to fetch patient addresses"
+        });
+    }
+});
+
+// =======================
+// 🏥 Get Filtered Home Summary by Address
+// =======================
+app.get("/api/home-summary-filtered", (req, res) => {
+    const address = req.query.address;
+    
+    if (!unifiedCache.loaded) {
+        return res.status(503).json({
+            error: "Cache is still loading. Please wait...",
+            loading: true,
+        });
+    }
+
+    try {
+        let filteredPatients = unifiedCache.patients;
+        let filteredVisits = unifiedCache.visits;
+        let filteredDeliveries = unifiedCache.deliveries;
+        let filteredBabies = unifiedCache.babies;
+
+        // Filter by address if provided and not 'all'
+        if (address && address !== 'all') {
+            filteredPatients = unifiedCache.patients.filter(p => 
+                p.ADDRESS && p.ADDRESS === address
+            );
+            
+            const filteredPatientIds = filteredPatients.map(p => p.PATIENT_ID);
+            
+            filteredVisits = unifiedCache.visits.filter(v => 
+                filteredPatientIds.includes(v.PATIENT_ID)
+            );
+            filteredDeliveries = unifiedCache.deliveries.filter(d => 
+                filteredPatientIds.includes(d.PATIENT_ID)
+            );
+            filteredBabies = unifiedCache.babies.filter(b => 
+                filteredPatientIds.includes(b.PATIENT_ID)
+            );
+        }
+
+        // Calculate metrics with filtered data
+        const hospitalPatients = filteredPatients || [];
+        const ongoingPatients = unifiedCacheOngoing.patients || []; // Ongoing patients remain unfiltered for now
+        const deliveries = filteredDeliveries || [];
+        const babies = filteredBabies || [];
+        const hospitalVisits = filteredVisits || [];
+        const ongoingVisits = unifiedCacheOngoing.visits || [];
+
+        // Your existing calculation logic here...
+        const totalHospitalPatients = hospitalPatients.length;
+        const totalOngoingPatients = ongoingPatients.length;
+        const totalPatients = totalHospitalPatients + totalOngoingPatients;
+        
+        // Calculate delivery types
+        let normalDeliveryCount = 0;
+        let cSectionDeliveryCount = 0;
+        
+        deliveries.forEach(delivery => {
+            const mode = delivery.DELIVERY_MODE?.toLowerCase();
+            if (mode) {
+                if (mode.includes('vaginal') || mode.includes('normal')) {
+                    normalDeliveryCount++;
+                } else if (mode.includes('c-section') || mode.includes('cesarean') || mode.includes('c_section')) {
+                    cSectionDeliveryCount++;
+                }
+            }
+        });
+        
+        const totalDeliveries = normalDeliveryCount + cSectionDeliveryCount;
+        const totalBabies = babies.length;
+        
+        // Calculate today's appointments
+        const today = new Date().toDateString();
+        const todaysAppointments = 
+            hospitalVisits.filter(v => v.VISIT_DATE && new Date(v.VISIT_DATE).toDateString() === today).length +
+            ongoingVisits.filter(v => v.VISIT_DATE && new Date(v.VISIT_DATE).toDateString() === today).length;
+        
+        // Calculate delivery types from babies data
+        let maturedCount = 0;
+        let prematureCount = 0;
+        let mortalityCount = 0;
+
+        babies.forEach(baby => {
+            if (baby.SOURCE_SCHEMA === 'MATURED') {
+                maturedCount++;
+            } else if (baby.SOURCE_SCHEMA === 'PREMATURE') {
+                prematureCount++;
+            } 
+        });
+
+        hospitalPatients.forEach(patient => {
+            if (patient.SOURCE_SCHEMA === 'MORTALITY') {
+                mortalityCount++;
+            }
+        });
+
+        const totalBabiesWithType = maturedCount + prematureCount + mortalityCount;
+        const maturedRate = totalBabiesWithType > 0 ? Math.round((maturedCount / totalBabiesWithType) * 100) : 0;
+        const prematureRate = totalBabiesWithType > 0 ? Math.round((prematureCount / totalBabiesWithType) * 100) : 0;
+        const mortalityRate = totalBabiesWithType > 0 ? Math.round((mortalityCount / totalBabiesWithType) * 100) : 0;
+
+        const summary = {
+            success: true,
+            // Core Metrics
+            totalPatients: totalPatients,
+            activePregnancies: totalOngoingPatients,
+            historicalPatients: totalHospitalPatients,
+            
+            // Delivery Analytics
+            normalDeliveryCount: normalDeliveryCount,
+            cSectionDeliveryCount: cSectionDeliveryCount,
+            totalDeliveries: totalDeliveries,
+            totalBabies: totalBabies,
+            
+            // Daily Operations
+            todaysAppointments: todaysAppointments,
+            
+            // Calculated Ratios
+            normalDeliveryRate: totalDeliveries > 0 ? Math.round((normalDeliveryCount / totalDeliveries) * 100) : 0,
+            cSectionRate: totalDeliveries > 0 ? Math.round((cSectionDeliveryCount / totalDeliveries) * 100) : 0,
+
+            // Delivery Types
+            deliveryTypes: {
+                matured: maturedRate,
+                premature: prematureRate,
+                mortality: mortalityRate,
+                maturedCount: maturedCount,
+                prematureCount: prematureCount,
+                mortalityCount: mortalityCount
+            },
+
+            // Filter info
+            filter: {
+                address: address,
+                patientCount: hospitalPatients.length
+            }
+        };
+
+        console.log(`✅ Filtered Home Summary: ${hospitalPatients.length} patients for address "${address}"`);
+        res.json(summary);
+        
+    } catch (err) {
+        console.error("❌ Error in /api/home-summary-filtered:", err.message);
+        res.status(500).json({ 
+            success: false,
+            error: "Failed to generate filtered summary",
+            details: err.message 
+        });
+    }
+});
+
+
+
+
+
+
 // Start server
 app.listen(port, () => {
-  console.log(`🚀 Server running at http://localhost:${port}`);
-  console.log(`💾 Cache system enabled - data will load on startup`);
+    console.log(`🚀 Server running at http://localhost:${port}`);
+    console.log(`💾 Cache system enabled - data will load on startup`);
 });
+
